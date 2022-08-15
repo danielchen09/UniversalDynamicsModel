@@ -1,11 +1,12 @@
 import jax.numpy as jnp
 import jax
+from dm_control import suite
 
 from physics import *
 
-class DoublePendulumDataset:
+class AnalyticalDoublePendulumDataset:
     def __init__(self, m1=1, m2=1, l1=1, l2=1, g=9.8):
-        self.m1, self.m2, self.l2, self.l2, self.g1 = m1, m2, l1, l2
+        self.m1, self.m2, self.l2, self.l2, self.g1 = m1, m2, l1, l2, g
     
     def get_data(self, x0, times): 
         x = jax.device_get(solve_analytical(x0, times)) # dynamics for first N time steps
@@ -26,7 +27,7 @@ class DoublePendulumDataset:
         # potential energy (V)
         y1 = -self.l1 * jnp.cos(t1)
         y2 = y1 - self.l2 * jnp.cos(t2)
-        V = self.m1 * self.g * y1 + self.m2 * g * y2
+        V = self.m1 * self.g * y1 + self.m2 * self.g * y2
 
         return T - V
 
