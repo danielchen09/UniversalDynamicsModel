@@ -9,8 +9,11 @@ from dm_control.suite import acrobot
 from dm_control.suite import common
 from dm_control.rl import control
 from dm_control.utils import io as resources
+from dataset import MujocoDataset
+import xml.etree.ElementTree as ET
 
 from physics import *
+from utils import *
 
 class DoublePendulumDataset:
     def __init__(self, l1, l2):
@@ -55,7 +58,7 @@ class AnalyticalDoublePendulumDataset(DoublePendulumDataset):
         x = jax.device_get(solve_analytical(x0, times)) # dynamics for first N time steps
         xt = jax.device_get(jax.vmap(f_analytical)(x)) # time derivatives of each state
         x = jax.device_put(jax.vmap(normalize_dp)(x))
-        return x, xt
+        return x, xt, np.zeros_like(x)
 
     def kinetic(self, q, q_dot):
         t1, t2 = q     # theta 1 and theta 2
@@ -98,59 +101,80 @@ class AnalyticalDoublePendulumDataset(DoublePendulumDataset):
         return jnp.stack([w1, w2, g1, g2])
 
 
-class MujocoDoublePendulumDataset(DoublePendulumDataset):
-    def __init__(self):
-        super().__init__(0.5, 0.5)
-    
+class MujocoDoublePendulumDataset(MujocoDataset):
     def get_env(self):
-        physics = acrobot.Physics.from_xml_string(resources.GetResource('xmls/acrobot.xml'), common.ASSETS)
+        tree = ET.parse('xmls/acrobot.xml')
+        root = tree.getroot()
+        if self.use_friction:
+            for option in root.iter('option'):
+                for flag in option.iter('flag'):
+                    flag.set('frictionloss', 'enable')
+            for joint in root.iter('joint'):
+                joint.attrib.pop('frictionloss', None)
+                joint.attrib.pop('damping', None)
+        physics = acrobot.Physics.from_xml_string(ET.tostring(root, encoding='utf8').decode(), common.ASSETS)
         task = acrobot.Balance(sparse=False, random=None)
         return control.Environment(physics, task, time_limit=10)
 
-    def get_data(self, x0, times):
-        interval = times[1] - times[0]
-        assert abs(interval * 100 - round(interval * 100)) < 1e-5
-        steps = round((times[-1] - times[0]) * 100)
-        presteps = round(times[0] * 100)
-
-        # env = suite.load('acrobot', 'swingup')
-        env = self.get_env()
+    def init_env(self, env, x0):
         state = env.physics.get_state()
-        state[:2] = self._x2q(x0)
+        state[:2] = x2q(x0)
         env.physics.set_state(state)
         env.physics.forward()
 
-        x = []
-        xt = []
-        i = 0
-        for _ in range(presteps):
-            env.physics.step()
-        for step in range(steps):
-            if step == round((times[i] - times[0]) * 100):
-                x.append(np.hstack([self._q2x(env.physics.data.qpos), env.physics.data.qvel]))
-                xt.append(np.hstack([env.physics.data.qvel, env.physics.data.qacc]))
-                i += 1
-            env.physics.step()
-        return np.vstack(x), np.vstack(xt)
+    def get_x(self, env):
+        return np.hstack([q2x(env.physics.data.qpos), env.physics.data.qvel])
 
-    def _x2q(self, x):
-        q1 = np.pi - x[0]
-        q2 = np.pi - q1 - x[1]
-        return np.array([q1, q2])
+    def get_xt(self, env):
+        return np.hstack([env.physics.data.qvel, env.physics.data.qacc])
+
+    def get_u(self, action):
+        return np.array([0, action[-1]])
+
+class DoublePendulumBodyDataset(MujocoDoublePendulumDataset):
+    def get_x(self, env):
+        return np.hstack([
+            env.physics.data.geom_xpos[2:].reshape(-1), # position (2*3=6)
+            mat2euler(env.physics.data.geom_xmat[2:]).reshape(-1), # orientation (2*3=6)
+            env.physics.data.sensordata[:12], # linear, angular velocities (2*3*2=12)
+        ])
+
+    def get_xt(self, env):
+        return env.physics.data.sensordata
+
+    def get_u(self, action):
+        return np.array([0, action[-1]])
+
+class MultiplePendulumDataset(MujocoDoublePendulumDataset):
+    def __init__(self, trials, use_friction=True, use_action=False):
+        self.trials = trials
+        self.rng = np.random.RandomState(42)
+        super().__init__(use_friction, use_action)
     
-    def _q2x(self, q):
-        x1 = np.pi - q[0]
-        x2 = np.pi - q[0] - q[1]
-        return np.array([x1, x2])
+    def get_data(self, x0, times):
+        xs = []
+        xts = []
+        us = []
+        for _ in range(self.trials):
+            x0 = self.rng.uniform(low=-0.5, high=0.5, size=(2,)) * np.pi # [-pi/2, pi/2]
+            x, xt, u = super().get_data(x0, times)
+            xs.append(x)
+            xts.append(xt)
+            us.append(u)
+        return np.concatenate(xs), np.concatenate(xts), np.concatenate(us)
 
 if __name__ == '__main__':
     from utils import *
-    ds = MujocoDoublePendulumDataset()
+    ds = DoublePendulumBodyDataset(use_action=False, use_friction=False)
     t = np.linspace(0, 100, 1001)
     x0 = np.array([3 / 7 * np.pi, 3 / 4 * np.pi, 0, 0], dtype=np.float32)
-    x, xt = ds.get_data(x0, t)
-    v = np.mean(x[:, 2:], axis=1)
-    plt.plot(t[:v.shape[0]], v)
+    x, xt, u = ds.get_data(x0, t)
+    print(np.all(x[:, 6:] == xt[:, :6]))
+    # plt.plot(t[:x.shape[0]], np.mean(x[:, :6], axis=1), label='x')
+    plt.plot(t[:x.shape[0]], np.mean(x[:, 6:], axis=1), label='v')
+    plt.plot(t[:x.shape[0]], np.mean(xt[:, 6:], axis=1), label='xt')
+    # plt.plot(t[:x.shape[0]], u[:, 1], label='u')
+    plt.legend()
     plt.show()
     # frames = ds.plot_trajectory(x)
     # generate_gif(frames, dt=10)

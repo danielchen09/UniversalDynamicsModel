@@ -3,6 +3,14 @@ import jax.numpy as jnp
 import numpy as np
 from jax.experimental.ode import odeint
 from functools import partial
+from jax.experimental.host_callback import call
+import diffrax
+from diffrax import Euler, diffeqsolve, ODETerm, Dopri5, Heun, PIDController, Tsit5
+import matplotlib.pyplot as plt
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
+from utils import *
 
 def lagrangian(q, q_dot, m1, m2, l1, l2, g):
     t1, t2 = q     # theta 1 and theta 2
@@ -32,19 +40,55 @@ def f_analytical(state, t=0, m1=1, m2=1, l1=1, l2=1, g=9.8):
     g2 = (f2 - a2 * f1) / (1 - a1 * a2)
     return jnp.stack([w1, w2, g1, g2])
 
-def equation_of_motion(lagrangian, state, t=None):
+def equation_of_motion(lagrangian, tau, state, u, t=None):
     q, q_t = jnp.split(state, 2)
-    q_tt = (jnp.linalg.pinv(jax.hessian(lagrangian, 1)(q, q_t))
-            @ (jax.grad(lagrangian, 0)(q, q_t)
-                - jax.jacobian(jax.jacobian(lagrangian, 1), 0)(q, q_t) @ q_t))
+    q_tt = (jnp.linalg.pinv(jax.hessian(lagrangian, 1)(q, q_t, u))
+            @ (tau(q, q_t, u) + jax.grad(lagrangian, 0)(q, q_t, u)
+                - jax.jacobian(jax.jacobian(lagrangian, 1), 0)(q, q_t, u) @ q_t))
     return jnp.concatenate([q_t, q_tt])
 
-def solve_lagrangian(lagrangian, initial_state, **kwargs):
+def solve_lagrangian_discrete(lagrangian, tau, initial_state, ts, us, **kwargs):
+    q = [initial_state]
+    dt = ts[1] - ts[0]
+
+    for t, u in zip(ts, us):
+        state = equation_of_motion(lagrangian, tau, q[-1], u)
+        x0 = q[-1].copy()
+        # x0 = q2x(x0)
+        x1 = wrap_angle(jnp.array(x0 + state * dt))
+        # x1 = x2q(x1)
+        q.append(x1)
+
+    return np.vstack(q)
+
+def solve_lagrangian_diffrax(lagrangian, tau, initial_state, ts, u, **kwargs):
+    def eom_fn(t, x, args):
+            # call(lambda z: print(z), args)
+            return equation_of_motion(lagrangian, tau, x, args[jnp.floor(t // (ts[1] - ts[0])).astype(int)], t=t)
+    # @partial(jax.jit, backend='cpu')
+    def f(initial_state):
+        solution = diffeqsolve(
+            diffrax.ODETerm(eom_fn),
+            Tsit5(), 
+            ts[0], 
+            ts[-1], 
+            None, 
+            initial_state,
+            u,
+            stepsize_controller=PIDController(**kwargs),
+            saveat=diffrax.SaveAt(ts=ts))
+        return solution.ys
+    return f(initial_state)
+
+def solve_lagrangian(lagrangian, tau, initial_state, t, u, **kwargs):
     # We currently run odeint on CPUs only, because its cost is dominated by
     # control flow, which is slow on GPUs.
+    def eom_fn(x, t, u):
+        # call(lambda z: print(z), t)
+        return equation_of_motion(lagrangian, tau, x, u, t=t)
     @partial(jax.jit, backend='cpu')
     def f(initial_state):
-        return odeint(partial(equation_of_motion, lagrangian), initial_state, **kwargs)
+        return odeint(eom_fn, initial_state, t, u, **kwargs)
     return f(initial_state)
 
 @partial(jax.jit, backend='cpu')

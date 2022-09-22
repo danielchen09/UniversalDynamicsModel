@@ -11,9 +11,9 @@ class GradientUpdater:
         self.optimizer = optimizer
     
     @partial(jax.jit, static_argnums=0)
-    def init(self, rng, data):
+    def init(self, rng, *data):
         out_rng, init_rng = jax.random.split(rng)
-        params = self.init_fn(init_rng, data)
+        params = self.init_fn(init_rng, *data)
         opt_state = self.optimizer.init(params)
         return {
             'step': np.array(0),
@@ -23,10 +23,10 @@ class GradientUpdater:
         }
     
     @partial(jax.jit, static_argnums=0)
-    def update(self, state, data):
+    def update(self, state, *data):
         rng, new_rng = jax.random.split(state['rng'])
         params = state['params']
-        loss, g = jax.value_and_grad(self.loss_fn)(params, rng, data)
+        loss, g = jax.value_and_grad(self.loss_fn)(params, rng, *data)
         updates, opt_state = self.optimizer.update(g, state['opt_state'], params)
         params = optax.apply_updates(params, updates)
         return {
