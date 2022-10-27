@@ -1,3 +1,4 @@
+from tkinter import X
 from dm_control import suite
 from dm_control.suite import acrobot
 from dm_control.suite import common
@@ -5,6 +6,7 @@ from dm_control.rl import control
 from dm_control.utils import io as resources
 import numpy as np
 import xml.etree.ElementTree as ET
+from tqdm import tqdm
 
 from utils import *
 
@@ -47,12 +49,13 @@ class MujocoDataset:
         i = 0
         for _ in range(presteps):
             env.physics.step()
-        for step in range(steps):
+        for step in range(steps + 1):
             if step == round((times[i] - times[0]) * 100):
                 x.append(self.get_x(env))
                 action = np.zeros(action_spec.shape)
                 if self.use_action:
                     action = rng.uniform(low=action_spec.minimum, high=action_spec.maximum, size=action_spec.shape)
+                    # action = np.ones(action_spec.shape[0])
                     env.physics.set_control(action)
                     env.physics.forward()
                 u.append(self.get_u(action))
@@ -60,6 +63,19 @@ class MujocoDataset:
                 i += 1
             env.physics.step()
         return np.vstack(x), np.vstack(xt), np.vstack(u)
+    
+    def plot_trajectory(self, trajectory):
+        env = self.get_env()
+        frames = []
+        for x in trajectory:
+            q = x2q(x)
+            state = env.physics.get_state()
+            state = np.zeros_like(state)
+            state[:] = q[:]
+            env.physics.set_state(state)
+            env.physics.step()
+            frames.append(env.physics.render(camera_id=-1))
+        return np.array(frames)
 
 
 class MultipleTrialsWrapper:
@@ -102,13 +118,25 @@ class SwimmerJointDataset(MujocoDataset):
         return control.Environment(physics, task, time_limit=10)
     
     def get_x(self, env):
-        return np.hstack([env.physics.data.qpos[3:], env.physics.data.qvel[3:]])
+        return np.hstack([env.physics.data.qpos[:3], q2x(env.physics.data.qpos[3:]), env.physics.data.qvel])
 
     def get_xt(self, env):
-        return np.hstack([env.physics.data.qvel[3:], env.physics.data.qacc[3:]])
+        return np.hstack([env.physics.data.qvel, env.physics.data.qacc])
     
     def get_u(self, action):
         return action
+    
+    def plot_trajectory(self, trajectory):
+        env = self.get_env()
+        frames = []
+        for x in tqdm(trajectory, desc='drawing trajectory'):
+            state = env.physics.get_state()
+            state = np.zeros_like(state)
+            state[:] = np.hstack([x[:3], x2q(x[3:8]), x[8:]])
+            env.physics.set_state(state)
+            env.physics.step()
+            frames.append(env.physics.render(camera_id=-1))
+        return np.array(frames)
 
 class MultipleSwimmerDataset(MultipleTrialsWrapper):
     def __init__(self, trials, **kwargs):

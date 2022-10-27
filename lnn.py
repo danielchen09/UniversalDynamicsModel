@@ -33,8 +33,9 @@ class Experiment:
                 l2reg = 2e-3,
                 enable_tau = True,
                 save_path=None,
-                noise=0.05,
-                patience=20):
+                noise=0,
+                patience=20,
+                log_step=1000):
 
         self.lr = lr
         self.grad_clip = grad_clip
@@ -46,6 +47,7 @@ class Experiment:
         self.save_path = save_path
         self.noise = noise
         self.patience = patience
+        self.log_step = log_step
 
         self.dataset_obj = dataset_obj
         self.t_train = t_train
@@ -63,7 +65,7 @@ class Experiment:
                 w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal'),
                 b_init=hk.initializers.RandomNormal())
             mlp_t = hk.nets.MLP(
-                [128, 128, x.shape[-1] // 2], 
+                [128, x.shape[-1] // 2], 
                 activation=jax.nn.softplus, 
                 w_init=hk.initializers.VarianceScaling(1.0, 'fan_avg', 'truncated_normal'),
                 b_init=hk.initializers.RandomNormal())
@@ -117,20 +119,6 @@ class Experiment:
         preds = jax.vmap(partial(equation_of_motion, self._learned_lagrangian(params, rng), self._learned_tau(params, rng)))(state, u)
         return jnp.mean((preds - targets) ** 2)
 
-    @partial(jax.jit, static_argnums=0)
-    def loss_fn_int(self, params, rng, batch):
-        state, targets, u, t = batch
-        x = state[:t.shape[0] - 1]
-        y_true = state[1:t.shape[0]]   
-        print(f'loss_fn_int: {(y_true.shape, t.shape, u.shape)}')
-        y_pred = solve_lagrangian_discrete(
-            self._learned_lagrangian(params, rng),
-            self._learned_tau(params, rng),
-            x[0],
-            t[:-1],
-            u)[1:]
-        return jnp.mean((y_true - y_pred) ** 2)
-
     def _learned_lagrangian(self, params, rng):
         @jax.jit
         def lagrangian(q, q_t, u):
@@ -152,7 +140,7 @@ class Experiment:
         test_losses = []
         for epoch in range(self.epochs):
             metric = self.train_step()
-            if metric['step'] % 1000 == 0:
+            if metric['step'] % self.log_step == 0:
                 train_losses.append(metric['loss'])
                 test_loss = self.test()
                 test_losses.append(test_loss)
@@ -171,26 +159,32 @@ class Experiment:
         plt.plot(np.arange(len(test_losses)), test_losses, label='test loss')
         plt.legend()
         plt.show()
+        self.save_state()
+        return train_losses, test_losses
+
+    def test(self):
+        return self.loss_fn(self.params, self.rng, (self.x_test, self.xt_test, self.u_test, self.t_test))
+
+    def save_state(self):
         with open(self.save_path, 'wb') as f:
             pickle.dump({
                 'state': self.state,
                 'train_data': (self.x_train, self.xt_train, self.u_train, self.t_train),
                 'test_data': (self.x_test, self.xt_test, self.u_test, self.t_test),
             }, f)
-        return train_losses, test_losses
-
-    def test(self):
-        return self.loss_fn(self.params, self.rng, (self.x_test, self.xt_test, self.u_test, self.t_test))
+    
+    def load_state(self):
+        with open(self.save_path, 'rb') as f:
+            save = pickle.load(f)
+            self.state = save['state']
+            self.x_train, self.xt_train, self.u_train, self.t_train = save['train_data']
+            self.x_test, self.xt_test, self.u_test, self.t_test = save['test_data']
 
     def finalize(self, save_path=None):
         if not save_path:
             save_path = self.save_path
         if save_path:
-            with open(save_path, 'rb') as f:
-                save = pickle.load(f)
-                self.state = save['state']
-                self.x_train, self.xt_train, self.u_train, self.t_train = save['train_data']
-                self.x_test, self.xt_test, self.u_test, self.t_test = save['test_data']
+            self.load_state()
 
         xt_pred = jax.vmap(
             partial(
@@ -261,14 +255,20 @@ class DoublePendulumExperiment(Experiment):
                 lr_decay = 0.6,
                 l2reg = 2e-3,
                 enable_tau = True,
-                save_path = None):
+                save_path = None,
+                noise=0,
+                patience=20,
+                log_step=1000):
         super().__init__(np.array([3 / 7 * np.pi, 3 / 4 * np.pi, 0, 0], dtype=np.float32), dataset_obj, t_train, t_test,
-                lr = 1e-3,
-                grad_clip = 1,
-                epochs = 1000 * 300,
-                seed = 0,
-                lr_decay_step = 1000 * 20,
-                lr_decay = 0.6,
-                l2reg = 2e-3,
-                enable_tau = True,
-                save_path = None)
+                lr = lr,
+                grad_clip = grad_clip,
+                epochs = epochs,
+                seed = seed,
+                lr_decay_step = lr_decay_step,
+                lr_decay = lr_decay,
+                l2reg = l2reg,
+                enable_tau = enable_tau,
+                save_path = save_path,
+                noise=noise,
+                patience=patience,
+                log_step=log_step)

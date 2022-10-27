@@ -7,6 +7,7 @@ from jax.experimental.host_callback import call
 import diffrax
 from diffrax import Euler, diffeqsolve, ODETerm, Dopri5, Heun, PIDController, Tsit5
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
@@ -51,15 +52,18 @@ def solve_lagrangian_discrete(lagrangian, tau, initial_state, ts, us, **kwargs):
     q = [initial_state]
     dt = ts[1] - ts[0]
 
-    for t, u in zip(ts, us):
+    # for t, u in tqdm(zip(ts, us)):
+    #     x0 = q2x(q[-1][None, :])[0]
+    #     state = equation_of_motion(lagrangian, tau, x0, u)
+    #     x1 = wrap_angle(x0 + state * dt)
+    #     x1 = x2q(x1[None, :])[0]
+    #     q.append(x1)
+    for t, u in tqdm(zip(ts, us)):
         state = equation_of_motion(lagrangian, tau, q[-1], u)
-        x0 = q[-1].copy()
-        # x0 = q2x(x0)
-        x1 = wrap_angle(jnp.array(x0 + state * dt))
-        # x1 = x2q(x1)
+        x1 = wrap_angle(q[-1] + state * dt)
         q.append(x1)
 
-    return np.vstack(q)
+    return jnp.vstack(q)
 
 def solve_lagrangian_diffrax(lagrangian, tau, initial_state, ts, u, **kwargs):
     def eom_fn(t, x, args):

@@ -26,7 +26,7 @@ class DoublePendulumDataset:
 
         history_x, history_y = [], []
         for state in trajectory:
-            fig = plt.figure(figsize=(5, 4))
+            fig = plt.figure(figsize=(320 / 100, 240 / 100))
             ax = fig.add_subplot(autoscale_on=False, xlim=(-L, L), ylim=(-L, 1.))
             ax.set_aspect('equal')
             ax.grid()
@@ -46,7 +46,7 @@ class DoublePendulumDataset:
             buf = buf.reshape(fig.canvas.get_width_height()[::-1] + (3,))
             frames.append(buf)
             plt.close(fig)
-        return frames
+        return np.array(frames)
 
 
 class AnalyticalDoublePendulumDataset(DoublePendulumDataset):
@@ -130,6 +130,20 @@ class MujocoDoublePendulumDataset(MujocoDataset):
 
     def get_u(self, action):
         return np.array([0, action[-1]])
+    
+    def plot_trajectory(self, trajectory):
+        env = self.get_env()
+        frames = []
+        for x in trajectory:
+            q = x2q(x)
+            state = env.physics.get_state()
+            state = np.zeros_like(state)
+            state[:] = q[:]
+            env.physics.set_state(state)
+            env.physics.step()
+            frames.append(env.physics.render(camera_id=0))
+        return np.array(frames)
+
 
 class DoublePendulumBodyDataset(MujocoDoublePendulumDataset):
     def get_x(self, env):

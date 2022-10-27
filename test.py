@@ -1,22 +1,22 @@
-from dm_control import suite
-from dm_control.suite import acrobot
-from dm_control.suite import swimmer
-from dm_control.suite import common
-from dm_control.rl import control
-from dm_control.utils import io as resources
-import xml.etree.ElementTree as ET
+from os import times
+from dataset import SwimmerJointDataset
+from dblpen import AnalyticalDoublePendulumDataset, MujocoDoublePendulumDataset
+import numpy as np
+import matplotlib.pyplot as plt
 
-tree = ET.parse('xmls/swimmer6.xml')
-root = tree.getroot()
-for option in root.iter('option'):
-    for flag in option.iter('flag'):
-        flag.set('frictionloss', 'enable')
-for joint in root.iter('joint'):
-    joint.attrib.pop('frictionloss', None)
-    joint.attrib.pop('damping', None)
-physics = acrobot.Physics.from_xml_string(ET.tostring(root, encoding='utf8').decode(), common.ASSETS)
-task = acrobot.Balance(sparse=False, random=None)
-env = control.Environment(physics, task, time_limit=10)
-print(env.physics.named.data.sensordata)
-print(env.physics.data.energy)
-breakpoint()
+from utils import generate_gif, gif2mp4
+
+swimmer_ds = SwimmerJointDataset(use_friction=False, use_action=True)
+
+n = 1
+ts = np.arange(1500) / 100
+x, xt, u = swimmer_ds.get_data(np.zeros(10), ts)
+
+plt.hist(x)
+plt.show()
+
+frames = swimmer_ds.plot_trajectory(x)
+print(frames.shape)
+
+generate_gif(frames, dt=10)
+gif2mp4()
